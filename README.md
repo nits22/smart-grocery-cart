@@ -51,7 +51,7 @@ Watch the Smart Grocery Cart AI Agent in action:
 ### Prerequisites
 
 - Python 3.9+
-- API Keys for LLM services (OpenAI/Google Gemini)
+- API Keys for LLM services (OpenAI/Google Gemini/HuggingFace)
 - Supabase account (optional, for caching)
 
 ### Installation
