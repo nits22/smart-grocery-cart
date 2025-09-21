@@ -6,7 +6,7 @@ An intelligent grocery price comparison and cart optimization system powered by 
 
 - **Real-time Price Scraping**: Automated price collection from major grocery delivery platforms (Blinkit, Swiggy Instamart, Zepto)
 - **AI-Powered Optimization**: Intelligent cart optimization using LangChain agents with OpenAI/Gemini LLM integration
-- **Multi-Store Comparison**: Compare prices across multiple stores and find the best deals
+- **Multi-Store Comparison**: Compare prices across multiple stores (Blinkit, Swiggy Instamart, Zepto) and find the best prices
 - **Smart Recommendations**: AI-generated shopping advice and money-saving tips
 - **Interactive Web UI**: Clean Streamlit interface for easy shopping list management
 - **Fallback System**: Robust fallback mechanisms with mock data when scraping fails
@@ -41,6 +41,12 @@ An intelligent grocery price comparison and cart optimization system powered by 
 ```
 
 ## 🚀 Quick Start
+
+### 🎥 Demo Video
+
+Watch the Smart Grocery Cart AI Agent in action:
+
+![Smart Grocery Cart_AI_Agent](./assets/recording.gif)
 
 ### Prerequisites
 
