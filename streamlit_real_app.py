@@ -1,13 +1,14 @@
-# streamlit_real_app_fixed.py - Only calls API when button is clicked
+# streamlit_real_app_fixed.py - LangChain orchestrator integrated (call only on button click)
 import streamlit as st
 import pandas as pd
-from scraper_real import fetch_prices_for_list_real_sync
 from optimizer import greedy_optimize, ilp_optimize
 import json
 import time
+from agent_orchestrator import orchestrate
+from ai_agent_with_llm_summary import GroceryCartAIAgent
 
 st.set_page_config(
-    page_title="Smart Grocery Cart - Real Prices",
+    page_title="Smart Grocery Cart - AI Powered",
     page_icon="🛒",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -22,6 +23,14 @@ if 'price_results' not in st.session_state:
     st.session_state.price_results = {}
 if 'optimize_cart' not in st.session_state:
     st.session_state.optimize_cart = False
+if 'assigned_cart' not in st.session_state:
+    st.session_state.assigned_cart = {}
+if 'summary' not in st.session_state:
+    st.session_state.summary = ""
+if 'ai_summary' not in st.session_state:
+    st.session_state.ai_summary = ""
+if 'use_ai_agent' not in st.session_state:
+    st.session_state.use_ai_agent = True
 
 # Custom CSS for better UI
 st.markdown("""
@@ -135,7 +144,9 @@ with col2:
     compare_button_clicked = st.button(
         "🔍 Compare Prices",
         type="primary",
-        use_container_width=True,
+        # updated per deprecation note
+        # use_container_width=True,
+        use_container_width=False,
         disabled=not items or not selected_stores,
         help="Click to start price comparison"
     )
@@ -145,22 +156,26 @@ with col2:
         st.session_state.run_comparison = True
         st.session_state.comparison_done = False  # Reset previous results
         st.session_state.price_results = {}
+        st.session_state.assigned_cart = {}
+        st.session_state.summary = ""
 
-    if st.button("💾 Save Shopping List", use_container_width=True):
+    if st.button("💾 Save Shopping List", use_container_width=False):
         if items:
             st.session_state['saved_items'] = items
             st.success("Shopping list saved!")
 
     if 'saved_items' in st.session_state:
-        if st.button("📋 Load Saved List", use_container_width=True):
+        if st.button("📋 Load Saved List", use_container_width=False):
             st.rerun()
 
     # Clear results button
     if st.session_state.get('comparison_done', False):
-        if st.button("🗑️ Clear Results", use_container_width=True):
+        if st.button("🗑️ Clear Results", use_container_width=False):
             st.session_state.comparison_done = False
             st.session_state.price_results = {}
             st.session_state.run_comparison = False
+            st.session_state.assigned_cart = {}
+            st.session_state.summary = ""
             st.rerun()
 
 # IMPORTANT: Only run API calls if the flag is set
@@ -186,57 +201,97 @@ if st.session_state.get('run_comparison', False):
                 debug_container = st.expander("🔍 Debug Logs", expanded=True)
 
         try:
-            status_text.info("🌐 Setting up browser and connecting...")
-            progress_bar.progress(10, text="🚀 Starting Playwright browser...")
+            status_text.info("🌐 Preparing agent and fetching prices...")
+            progress_bar.progress(10, text="🚀 Preparing orchestrator...")
 
             start_time = time.time()
 
-            with st.spinner(f"Scraping prices from {len(selected_stores)} stores for {len(items)} items..."):
-                progress_bar.progress(30, text="🛒 Fetching product data...")
+            with st.spinner(f"Running AI agent to fetch prices for {len(items)} items..."):
+                progress_bar.progress(30, text="🛒 Fetching product data via AI agent...")
 
-                # THIS IS THE ONLY PLACE WHERE API IS CALLED
-                price_results = fetch_prices_for_list_real_sync(
-                    items=items,
-                    location=selected_location.lower(),
-                    stores=selected_stores,
-                    pincode=area_pincode if area_pincode else None,
-                    timeout=scraping_timeout,
-                    max_products=max_products,
-                    parallelism=2  # Keep it conservative
-                )
+                # Initialize AI Agent
+                ai_agent = GroceryCartAIAgent()
+
+                # Force lazy initialization to check if AI agent is really available
+                progress_bar.progress(40, text="🤖 Initializing AI agent...")
+                test_agent = ai_agent._get_agent_lazy()
+
+                # Use AI Agent with LLM summarization if available
+                if test_agent is not None or ai_agent.llm is not None:
+                    progress_bar.progress(50, text="🤖 AI agent analyzing prices...")
+                    st.info("✅ Using AI Agent with OpenAI for intelligent optimization")
+                    try:
+                        out = ai_agent.find_optimal_cart(
+                            items=items,
+                            city=selected_location,
+                            vendors=selected_stores
+                        )
+
+                        # Store AI summary
+                        st.session_state.ai_summary = out.get("ai_summary", "")
+
+                    except Exception as e:
+                        if "quota" in str(e).lower() or "429" in str(e):
+                            st.warning("🚫 API quota exceeded - switching to working orchestrator")
+                        else:
+                            st.warning(f"⚠️ AI agent failed: {e} - switching to working orchestrator")
+
+                        # Fallback to working orchestrator
+                        from working_orchestrator import working_orchestrate
+                        out = working_orchestrate(
+                            items=items,
+                            city=selected_location,
+                            vendors=selected_stores,
+                            method="greedy"
+                        )
+
+                else:
+                    # Fallback to working orchestrator only if no AI agent at all
+                    st.warning("🤖 AI agent not available, using working orchestrator")
+                    from working_orchestrator import working_orchestrate
+                    out = working_orchestrate(
+                        items=items,
+                        city=selected_location,
+                        vendors=selected_stores,
+                        method="greedy"
+                    )
 
                 progress_bar.progress(80, text="📊 Processing results...")
 
-                # Immediately after price_results is available
-                for item in price_results:
-                    info = price_results[item].get("Blinkit", {})
-                    # show top-level error if present
-                    if info.get("error"):
-                        st.warning(f"{item} — Blinkit error: {info.get('error')}")
-                    # show any raw_text the adapter returned
-                    meta = info.get("meta") or {}
-                    # our new adapter puts raw_text under meta.get('raw_text') or meta itself might be the api response
-                    raw_text = None
-                    if isinstance(meta, dict):
-                        raw_text = meta.get("raw_text") or meta.get("text") or meta.get("data") or None
-                    elif isinstance(meta, str):
-                        raw_text = meta
-                    if raw_text:
-                        st.markdown("**Raw response (first 2000 chars):**")
-                        st.code(str(raw_text)[:2000])
+                # Basic validation of orchestrator output
+                if not isinstance(out, dict):
+                    raise RuntimeError(f"Agent returned unexpected result: {out}")
+
+                # Handle different response formats from AI agent vs basic orchestrator
+                if 'raw_price_data' in out:
+                    # AI agent response format - map to expected format
+                    st.session_state.price_results = out.get("raw_price_data", {})
+                    st.session_state.assigned_cart = out.get("assigned_cart", {})
+                    st.session_state.summary = out.get("summary", "") or ""
+                    st.session_state.ai_summary = out.get("ai_summary", "")
+                    st.session_state.total = out.get("total", 0.0)
+                    st.session_state.unavailable = out.get("unavailable", [])
+                elif 'price_results' in out:
+                    # Basic orchestrator response format
+                    st.session_state.price_results = out.get("price_results", {})
+                    st.session_state.assigned_cart = out.get("assigned_cart", {})
+                    st.session_state.summary = out.get("summary", "") or ""
+                    st.session_state.total = out.get("total", 0.0)
+                    st.session_state.unavailable = out.get("unavailable", [])
+                else:
+                    raise RuntimeError(f"Agent returned unexpected result format: {list(out.keys())}")
 
             elapsed_time = time.time() - start_time
             progress_bar.progress(100, text="✅ Completed!")
 
             if debug_mode and 'debug_container' in locals():
                 with debug_container:
-                    st.write("**Raw API Results:**")
-                    st.json(price_results)
+                    st.write("**Raw Orchestrator Output:**")
+                    st.json(out)
 
             # Validate results
+            price_results = st.session_state.price_results
             if price_results and isinstance(price_results, dict) and price_results:
-                # Store results in session state
-                st.session_state.price_results = price_results
                 st.session_state.comparison_done = True
 
                 # Count successful results
@@ -255,7 +310,7 @@ if st.session_state.get('run_comparison', False):
 
         except Exception as e:
             progress_bar.progress(0, text="❌ Error occurred")
-            st.error(f"❌ Error during price fetching: {str(e)}")
+            st.error(f"❌ Error during agent run: {str(e)}")
             status_text.error(f"Error: {str(e)}")
 
             if debug_mode:
@@ -266,12 +321,14 @@ if st.session_state.get('run_comparison', False):
             - Try with fewer items (just 'milk' and 'bread')
             - Use only Blinkit initially
             - Check your internet connection
-            - Make sure blinkit_playwright_api.py is in the same folder
+            - Make sure agent_orchestrator.py and lc_tools.py are present and LangChain dependencies installed
             """)
 
 # Display Results Section - Only if we have completed results
 if st.session_state.get('comparison_done', False) and st.session_state.get('price_results'):
-    price_results = st.session_state.price_results
+    price_results = st.session_state['price_results']
+    assigned_cart = st.session_state.get('assigned_cart', {})
+    summary_text = st.session_state.get('summary', "")
 
     st.markdown("---")
     st.header("📊 Price Comparison Results")
@@ -279,6 +336,16 @@ if st.session_state.get('comparison_done', False) and st.session_state.get('pric
     if not isinstance(price_results, dict) or not price_results:
         st.error("Invalid price results format")
         st.stop()
+
+    # Show the AI summary if available (prominent display)
+    if st.session_state.get('ai_summary'):
+        st.markdown("### 🧠 AI Shopping Assistant Summary")
+        st.info(st.session_state.ai_summary)
+        st.markdown("---")
+
+    # Show the basic summary if present
+    if summary_text:
+        st.success(summary_text)
 
     # Create comparison table
     comparison_data = []
@@ -326,7 +393,7 @@ if st.session_state.get('comparison_done', False) and st.session_state.get('pric
 
         # Display comparison table
         df_comparison = pd.DataFrame(comparison_data)
-        st.dataframe(df_comparison, use_container_width=True, hide_index=True)
+        st.dataframe(df_comparison, width='stretch', hide_index=True)
 
         # Optimization Section
         st.header("🎯 Optimized Shopping Cart")
@@ -342,14 +409,13 @@ if st.session_state.get('comparison_done', False) and st.session_state.get('pric
 
         with col2:
             # Optimize button - another controlled action
-            optimize_button_clicked = st.button("🚀 Optimize Cart", type="primary")
+            optimize_button_clicked = st.button("🚀 Optimize Cart", type="primary", key="optimize_btn")
             if optimize_button_clicked:
                 st.session_state.optimize_cart = True
 
-        # Perform optimization only if button was clicked
+        # If the orchestrator already provided an assigned cart, show that by default.
         if st.session_state.get('optimize_cart', False):
             st.session_state.optimize_cart = False  # Reset flag
-
             try:
                 with st.spinner("Optimizing your cart..."):
                     if optimization_method == "Greedy (Fast)":
@@ -362,125 +428,163 @@ if st.session_state.get('comparison_done', False) and st.session_state.get('pric
                             price_results,
                             delivery_fees=delivery_fees if include_delivery else None
                         )
-
-                # Display optimized results
-                st.subheader("🛍️ Your Optimized Cart")
-
-                cart_data = []
-                total_cost = 0
-                used_stores = set()
-                unavailable_items = []
-
-                for item, assignment in optimization_result.items():
-                    if assignment and len(assignment) == 2 and assignment[0]:  # Valid assignment
-                        store, price = assignment
-                        cart_data.append({
-                            "Product": item,
-                            "Best Store": store,
-                            "Price": f"₹{price:.2f}",
-                            "Status": "✅ Added to Cart"
-                        })
-                        total_cost += float(price)
-                        used_stores.add(store)
-                    else:
-                        unavailable_items.append(item)
-                        cart_data.append({
-                            "Product": item,
-                            "Best Store": "None",
-                            "Price": "N/A",
-                            "Status": "❌ Unavailable"
-                        })
-
-                # Display cart table
-                if cart_data:
-                    df_cart = pd.DataFrame(cart_data)
-                    st.dataframe(df_cart, use_container_width=True, hide_index=True)
-
-                    # Cost summary
-                    col1, col2, col3 = st.columns(3)
-
-                    with col1:
-                        items_in_cart = len([x for x in cart_data if "✅" in x["Status"]])
-                        st.metric("Items in Cart", items_in_cart)
-
-                    with col2:
-                        delivery_cost = 0
-                        if include_delivery and used_stores:
-                            delivery_cost = sum(delivery_fees.get(store, 0) for store in used_stores)
-
-                        total_with_delivery = total_cost + delivery_cost
-                        st.metric("Total Cost", f"₹{total_with_delivery:.2f}")
-
-                        if include_delivery and delivery_cost > 0:
-                            st.caption(f"Includes ₹{delivery_cost:.2f} delivery")
-
-                    with col3:
-                        st.metric("Stores Used", len(used_stores))
-
-                    # Store distribution
-                    if used_stores:
-                        st.subheader("🏪 Store Distribution")
-
-                        store_breakdown = {}
-                        for item, assignment in optimization_result.items():
-                            if assignment and len(assignment) == 2 and assignment[0]:
-                                store = assignment[0]
-                                store_breakdown[store] = store_breakdown.get(store, 0) + 1
-
-                        for store, count in store_breakdown.items():
-                            col1, col2 = st.columns([3, 1])
-                            with col1:
-                                st.write(f"**{store}**: {count} items")
-                            with col2:
-                                if include_delivery:
-                                    st.write(f"₹{delivery_fees.get(store, 0)} delivery")
-
-                    # Unavailable items warning
-                    if unavailable_items:
-                        st.warning(f"⚠️ **{len(unavailable_items)} items unavailable**: {', '.join(unavailable_items)}")
-
-                    # Export options
-                    st.subheader("📤 Export Options")
-
-                    col1, col2 = st.columns(2)
-
-                    with col1:
-                        # Download cart as CSV
-                        csv = df_cart.to_csv(index=False)
-                        st.download_button(
-                            "📄 Download Cart (CSV)",
-                            csv,
-                            "smart_grocery_cart.csv",
-                            "text/csv"
-                        )
-
-                    with col2:
-                        # Generate shopping summary
-                        summary = {
-                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                            "location": selected_location,
-                            "total_items": len(items),
-                            "available_items": items_in_cart,
-                            "total_cost": total_with_delivery,
-                            "delivery_cost": delivery_cost,
-                            "stores_used": list(used_stores),
-                            "unavailable_items": unavailable_items,
-                            "cart_details": cart_data
-                        }
-
-                        summary_json = json.dumps(summary, indent=2)
-                        st.download_button(
-                            "📋 Download Summary (JSON)",
-                            summary_json,
-                            "cart_summary.json",
-                            "application/json"
-                        )
-
+                    # overwrite assigned cart with new optimization result
+                    st.session_state.assigned_cart = optimization_result
             except Exception as e:
                 st.error(f"❌ Optimization failed: {str(e)}")
                 if debug_mode:
                     st.exception(e)
-                st.info("Try using the Greedy method or check your data.")
+
+        # Use assigned_cart from session state (either orchestrator or manual optimization)
+        assigned_cart_from_session = st.session_state.get('assigned_cart', {})
+
+        # Display optimized results
+        st.subheader("🛍️ Your Optimized Cart")
+
+        cart_data = []
+        total_cost = 0
+        used_stores = set()
+        unavailable_items = []
+
+        # Transform assigned_cart format: from {store: [items]} to {item: (store, price)}
+        final_assigned = {}
+        for store, items_list in assigned_cart_from_session.items():
+            if isinstance(items_list, list):
+                for item_info in items_list:
+                    if isinstance(item_info, dict):
+                        item_name = item_info.get('item', '')
+                        price = item_info.get('price', 0)
+                        if item_name and price is not None:
+                            final_assigned[item_name] = (store, price)
+
+        # Also handle items from session state that might be unavailable
+        unavailable_from_session = st.session_state.get('unavailable', [])
+
+        # Process all requested items
+        for item in items:
+            if item in final_assigned:
+                store, price = final_assigned[item]
+                # Ensure price is numeric
+                try:
+                    price_float = float(price)
+                    cart_data.append({
+                        "Product": item,
+                        "Best Store": store,
+                        "Price": f"₹{price_float:.2f}",
+                        "Status": "✅ Added to Cart"
+                    })
+                    total_cost += price_float
+                    used_stores.add(store)
+                except (ValueError, TypeError) as e:
+                    st.error(f"Invalid price format for {item}: {price}")
+                    cart_data.append({
+                        "Product": item,
+                        "Best Store": store,
+                        "Price": "Error",
+                        "Status": "❌ Price Error"
+                    })
+            elif item in unavailable_from_session:
+                unavailable_items.append(item)
+                cart_data.append({
+                    "Product": item,
+                    "Best Store": "None",
+                    "Price": "N/A",
+                    "Status": "❌ Unavailable"
+                })
+            else:
+                # Item not found in either available or unavailable lists
+                unavailable_items.append(item)
+                cart_data.append({
+                    "Product": item,
+                    "Best Store": "None",
+                    "Price": "N/A",
+                    "Status": "❌ Not Found"
+                })
+
+        # Display cart table
+        if cart_data:
+            df_cart = pd.DataFrame(cart_data)
+            st.dataframe(df_cart, width='stretch', hide_index=True)
+
+            # Cost summary
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                items_in_cart = len([x for x in cart_data if "✅" in x["Status"]])
+                st.metric("Items in Cart", items_in_cart)
+
+            with col2:
+                delivery_cost = 0
+                if include_delivery and used_stores:
+                    delivery_cost = sum(delivery_fees.get(store, 0) for store in used_stores)
+
+                total_with_delivery = total_cost + delivery_cost
+                st.metric("Total Cost", f"₹{total_with_delivery:.2f}")
+
+                if include_delivery and delivery_cost > 0:
+                    st.caption(f"Includes ₹{delivery_cost:.2f} delivery")
+
+            with col3:
+                st.metric("Stores Used", len(used_stores))
+
+            # Store distribution
+            if used_stores:
+                st.subheader("🏪 Store Distribution")
+
+                store_breakdown = {}
+                for item, assignment in final_assigned.items():
+                    if assignment and len(assignment) == 2 and assignment[0]:
+                        store = assignment[0]
+                        store_breakdown[store] = store_breakdown.get(store, 0) + 1
+
+                for store, count in store_breakdown.items():
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.write(f"**{store}**: {count} items")
+                    with col2:
+                        if include_delivery:
+                            st.write(f"₹{delivery_fees.get(store, 0)} delivery")
+
+            # Unavailable items warning
+            if unavailable_items:
+                st.warning(f"⚠️ **{len(unavailable_items)} items unavailable**: {', '.join(unavailable_items)}")
+
+            # Export options
+            st.subheader("📤 Export Options")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                # Download cart as CSV
+                csv = df_cart.to_csv(index=False)
+                st.download_button(
+                    "📄 Download Cart (CSV)",
+                    csv,
+                    "smart_grocery_cart.csv",
+                    "text/csv"
+                )
+
+            with col2:
+                # Generate shopping summary
+                summary = {
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "location": selected_location,
+                    "total_items": len(items),
+                    "available_items": items_in_cart,
+                    "total_cost": total_with_delivery,
+                    "delivery_cost": delivery_cost,
+                    "stores_used": list(used_stores),
+                    "unavailable_items": unavailable_items,
+                    "cart_details": cart_data
+                }
+
+                summary_json = json.dumps(summary, indent=2)
+                st.download_button(
+                    "📋 Download Summary (JSON)",
+                    summary_json,
+                    "cart_summary.json",
+                    "application/json"
+                )
 
     else:
         st.warning("No valid comparison data available.")
@@ -491,6 +595,6 @@ st.markdown("""
 <div style='text-align: center; color: #666; padding: 1rem;'>
     <p>🛒 Smart Grocery Cart - Compare prices across grocery delivery platforms</p>
     <p style='font-size: 0.8rem;'>⚠️ Prices are fetched in real-time and may vary. Always verify on the store website.</p>
-    <p style='font-size: 0.7rem;'>Powered by Playwright for reliable web scraping</p>
+    <p style='font-size: 0.7rem;'>Powered by Playwright and LangChain orchestrator</p>
 </div>
 """, unsafe_allow_html=True)

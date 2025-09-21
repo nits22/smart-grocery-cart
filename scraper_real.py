@@ -6,6 +6,22 @@ import re
 from typing import List, Dict, Any, Tuple, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Safe database saving function to avoid import issues
+def _safe_save_to_db(store, item_text, price, available, meta=None):
+    """Safe database saving that doesn't break scraper if db import fails"""
+    try:
+        from db import save_price_cache
+        save_price_cache(
+            store=store,
+            item_text=item_text,
+            price=price,
+            available=available,
+            meta=meta
+        )
+    except Exception as e:
+        # Don't let database errors break the scraper
+        print(f"⚠️ DB save skipped for {item_text}@{store}: {e}")
+
 # Import the working Playwright APIs
 try:
     from blinkit_playwright_api import search_blinkit_products
@@ -378,6 +394,14 @@ def _instamart_search_item_fallback(session, item_text: str, lat: Optional[float
     # return best result
     return {"price": float(best_price), "available": True, "meta": best.get("raw"), "error": None}
 
+# Add missing Swiggy Instamart function
+def _swiggy_search_item_playwright(item_text: str, lat: Optional[float], lon: Optional[float],
+                                   headers: Dict[str, str], timeout: int = 20, max_products: int = 5) -> Dict[str, Any]:
+    """
+    Swiggy Instamart search using Playwright API (alias for Instamart)
+    """
+    return _instamart_search_item_playwright(item_text, lat, lon, headers, timeout, max_products)
+
 # --------- Public function called by your UI -------------------------------
 
 def fetch_prices_for_list_real_sync(items: List[str], location: str = "mumbai", stores: List[str] = None,
@@ -432,6 +456,9 @@ def fetch_prices_for_list_real_sync(items: List[str], location: str = "mumbai", 
                         result = _blinkit_search_item_playwright(item, lat, lon, headers, timeout, max_products)
                         price_results[item][store] = result
 
+                        # save to Supabase safely
+                        _safe_save_to_db(store, item, result.get("price"), result.get("available"), result.get("meta"))
+
                         # Enhanced logging
                         if result.get("price"):
                             print(f"    📊 API result: success=True, error=None")
@@ -452,6 +479,9 @@ def fetch_prices_for_list_real_sync(items: List[str], location: str = "mumbai", 
                         result = _instamart_search_item_playwright(item, lat, lon, headers, timeout, max_products)
                         price_results[item][store] = result
 
+                        # save to Supabase safely
+                        _safe_save_to_db(store, item, result.get("price"), result.get("available"), result.get("meta"))
+
                         # Enhanced logging
                         if result.get("price"):
                             print(f"    📊 API result: success=True, error=None")
@@ -467,11 +497,17 @@ def fetch_prices_for_list_real_sync(items: List[str], location: str = "mumbai", 
                             "error": f"Exception: {e}"
                         }
                 else:
-                    # not implemented for other stores
-                    price_results[item][store] = {
-                        "price": None, "available": False, "meta": None,
-                        "error": f"{store} scraping not implemented in this demo"
-                    }
+                    # Try Swiggy Instamart with Playwright if available
+                    if store == "Swiggy Instamart" and INSTAMART_AVAILABLE:
+                        swiggy_result = _swiggy_search_item_playwright(item, lat, lon, headers, timeout, max_products)
+                        price_results[item][store] = swiggy_result
+                        _safe_save_to_db(store, item, swiggy_result.get("price"), swiggy_result.get("available"), swiggy_result.get("meta"))
+                    else:
+                        # Fallback for other stores or when APIs not available
+                        price_results[item][store] = {
+                            "price": None, "available": False, "meta": None,
+                            "error": f"{store} scraping temporarily unavailable"
+                        }
 
             # Small delay between items to be respectful and prevent rate limiting
             time.sleep(2.0)
@@ -489,6 +525,9 @@ def fetch_prices_for_list_real_sync(items: List[str], location: str = "mumbai", 
                             result = _blinkit_search_item_fallback(session, item, lat, lon, headers, timeout, max_products)
                             price_results[item][store] = result
 
+                            # save to Supabase safely
+                            _safe_save_to_db(store, item, result.get("price"), result.get("available"), result.get("meta"))
+
                             if result.get("price"):
                                 print(f"    ✅ {store}: ₹{result['price']}")
                             else:
@@ -505,6 +544,9 @@ def fetch_prices_for_list_real_sync(items: List[str], location: str = "mumbai", 
                             result = _instamart_search_item_fallback(session, item, lat, lon, headers, timeout, max_products)
                             price_results[item][store] = result
 
+                            # save to Supabase safely
+                            _safe_save_to_db(store, item, result.get("price"), result.get("available"), result.get("meta"))
+
                             if result.get("price"):
                                 print(f"    ✅ {store}: ₹{result['price']}")
                             else:
@@ -517,10 +559,16 @@ def fetch_prices_for_list_real_sync(items: List[str], location: str = "mumbai", 
                                 "error": f"Exception: {e}"
                             }
                     else:
-                        price_results[item][store] = {
-                            "price": None, "available": False, "meta": None,
-                            "error": f"{store} scraping not implemented in this demo"
-                        }
+                        # Try Swiggy Instamart with Playwright if available
+                        if store == "Swiggy Instamart" and INSTAMART_AVAILABLE:
+                            swiggy_result = _swiggy_search_item_playwright(item, lat, lon, headers, timeout, max_products)
+                            price_results[item][store] = swiggy_result
+                            _safe_save_to_db(store, item, swiggy_result.get("price"), swiggy_result.get("available"), swiggy_result.get("meta"))
+                        else:
+                            price_results[item][store] = {
+                                "price": None, "available": False, "meta": None,
+                                "error": f"{store} scraping not implemented in this demo"
+                            }
 
                 time.sleep(1.5)
         else:
