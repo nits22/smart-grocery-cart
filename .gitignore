@@ -1,0 +1,90 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+.env/
+.venv/
+
+# Environment variables
+*.env
+.env.local
+.env.*.local
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+*.hypothesis/
+.pytest_cache/
+.pyre/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDE / editor configs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS files
+.DS_Store
+
+# Logs
+*.log
+
+# Playwright / Browser testing
+playwright-report/
+test-results/
+.playwright/
+
+# Streamlit
+.streamlit/secrets.toml
+.streamlit/config.toml
+
+# Local SQLite or Supabase cache (if you add one)
+*.db
+
+# Ignore compiled frontend assets if any
+frontend/node_modules/
+frontend/.next/
+
+# Debug files created during development
+debug.log
+debug_logs/
+test_instamart_structure.py
+analyze_instamart_structure.py
+debug_*.py
+run_debug.py
+pycharm_*.py
+simple_debug.py

@@ -1,0 +1,7 @@
+streamlit
+supabase
+requests
+beautifulsoup4
+pandas
+pulp
+python-dotenv
